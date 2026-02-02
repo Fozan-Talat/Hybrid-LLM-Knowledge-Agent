@@ -1,4 +1,3 @@
-```markdown
 # Hybrid LLM Knowledge Agent
 
 ## Overview
