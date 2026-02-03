@@ -4,11 +4,13 @@ from ingestion.embeddings import embed_texts
 from graph.neo4j_client import Neo4jClient
 import requests
 
-def vector_search(query: str):
+def vector_search(query: str, query_lang: str):
     store = FaissStore()
     store.load()
     qvec = embed_texts([query])[0]
-    return store.search(qvec)
+    results = store.search(qvec)
+    # return [r for r in results if r.get("language") == query_lang]
+    return [r for r in results]
 
 def graph_search(entity_name: str):
     graph = Neo4jClient()

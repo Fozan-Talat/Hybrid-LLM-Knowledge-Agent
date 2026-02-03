@@ -1,4 +1,4 @@
-from fastapi import FastAPI, UploadFile, File, HTTPException
+from fastapi import FastAPI, Query, UploadFile, File, HTTPException
 import tempfile
 import os
 import traceback
@@ -14,7 +14,10 @@ def ask(q: str):
     return answer(q)
 
 @app.post("/ingest/pdf")
-async def ingest_pdf(file: UploadFile = File(...)):
+async def ingest_pdf(
+    file: UploadFile = File(...),
+    force: bool = Query(False, description="Force re-ingestion even if document already exists")
+):
     # -------------------------
     # Validate file type
     # -------------------------
@@ -31,10 +34,10 @@ async def ingest_pdf(file: UploadFile = File(...)):
         with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
             contents = await file.read()
 
-            if len(contents) > 5 * 1024 * 1024:
+            if len(contents) > 20 * 1024 * 1024:
                 raise HTTPException(
                     status_code=400,
-                    detail="PDF exceeds 5MB Textract inline limit"
+                    detail="PDF exceeds 20MB Azure Document Intelligence inline limit"
                 )
 
             tmp.write(contents)
@@ -48,14 +51,18 @@ async def ingest_pdf(file: UploadFile = File(...)):
         # -------------------------
         # Run ingestion pipeline
         # -------------------------
-        result = ingest(tmp_path)
+        result = ingest(tmp_path, force=force)
 
-        return {
-            "status": "success",
-            "document_id": doc_id,
-            "pages_ingested": result["pages"],
-            "chunks_created": result["chunks"]
-        }
+        if result["status"] == "success":
+            return {
+                "status": "success",
+                "document_id": doc_id,
+                "pages_ingested": result["pages"],
+                "chunks_created": result["chunks"],
+                "entities_created": result["entities_created"]
+            }
+        else:
+            return result
 
     except HTTPException:
         raise

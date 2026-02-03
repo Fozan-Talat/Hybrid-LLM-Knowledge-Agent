@@ -25,12 +25,8 @@ services:
       neo4j:
         condition: service_healthy
     environment:
-      OPENAI_API_KEY: ${OPENAI_API_KEY}
-      SERPAPI_KEY: ${SERPAPI_KEY}
-      AWS_REGION: ${AWS_REGION:-us-east-1}
-      NEO4J_URI: bolt://neo4j:7687
-      NEO4J_USER: neo4j
-      NEO4J_PASSWORD: password
+      FERNET_KEY: ${FERNET_KEY}
+      NEO4J_CREDS_FILE: ${NEO4J_CREDS_FILE}
     ports:
       - "8000:8000"
     volumes:

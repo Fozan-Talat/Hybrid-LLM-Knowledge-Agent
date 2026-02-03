@@ -1,24 +1,11 @@
 import re
 import spacy
-import stanza
+from openai import OpenAI
+import json
 
-# stanza.download('en', package='mimic', processors={'ner': 'i2b2'})         
+client = OpenAI()
 
 nlp = spacy.load("en_core_web_sm")
-# nlp = stanza.Pipeline('en', package='mimic', processors={'ner': 'i2b2'})
-# _nlp = None
-
-def get_nlp():
-    global _nlp
-    if _nlp is None:
-        _nlp = stanza.Pipeline(
-            lang="en",
-            processors="tokenize,pos,lemma,depparse,ner",
-            package=None,
-            ner_package="i2b2",
-            use_gpu=False
-        )
-    return _nlp
 
 SIGNAL_KEYWORDS = {
     "velocity",
@@ -69,6 +56,92 @@ def is_valid_entity(text: str, label: str) -> bool:
 
     return True
 
+
+def extract_entities_llm(text: str, lang: str) -> list[dict]:
+    """
+    Multilingual entity extraction using LLM.
+    Works especially well for Arabic.
+    Returns the SAME entity schema used elsewhere.
+    """
+
+    prompt = f"""
+You are a named entity extraction system.
+
+Extract meaningful named entities from the following text.
+Entities should be real-world concepts such as:
+- people
+- organizations
+- places
+- products
+- laws
+- languages
+- events
+
+Rules:
+- Ignore generic words and abstract concepts
+- Ignore numbers and measurements
+- Do NOT hallucinate entities
+- Preserve original language (do NOT translate)
+
+Return ONLY valid JSON in the following format:
+[
+  {{
+    "name": "<entity text>",
+    "entity_type": "<person|organization|location|product|event|law|language|other>"
+  }}
+]
+
+Text language: {lang}
+
+Text:
+\"\"\"{text}\"\"\"
+"""
+
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0
+        )
+
+        content = response.choices[0].message.content.strip()
+
+        # Defensive cleanup (LLMs sometimes wrap JSON)
+        content = re.sub(r"^```json|```$", "", content, flags=re.MULTILINE).strip()
+
+        entities = json.loads(content)
+
+        # Normalize to your existing schema
+        normalized = []
+        for e in entities:
+            if not e.get("name"):
+                continue
+
+            normalized.append({
+                "name": e["name"].strip(),
+                "entity_type": e.get("entity_type", "unknown"),
+                "source_label": "LLM",
+                "language": lang
+            })
+
+        return normalized
+
+    except Exception as e:
+        print("LLM entity extraction failed:", e)
+        return []
+    
+def extract_entities_smart(text: str, lang: str) -> list[dict]:
+    """
+    Automatically selects the best entity extractor
+    based on detected language.
+    """
+
+    # English → spaCy (fast, cheap)
+    if lang == "en":
+        return extract_entities(text)
+
+    # Arabic & everything else → LLM
+    return extract_entities_llm(text, lang)
 
 def extract_entities(text: str):
     # nlp = get_nlp()

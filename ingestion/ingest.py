@@ -1,11 +1,11 @@
+from app.language import detect_language
 from ingestion.ocr import ocr_pdf_with_azure
 from ingestion.chunking import chunk_pages
 from ingestion.embeddings import embed_texts
 from ingestion.dedup import document_hash
 from vectorstore.faiss_store import FaissStore
 from graph.neo4j_client import Neo4jClient
-from graph.graph_builder import extract_entities, persist_chunks_batch
-
+from graph.graph_builder import extract_entities_smart, persist_chunks_batch
 
 SIGNAL_KEYWORDS = {
     "velocity",
@@ -18,7 +18,6 @@ SIGNAL_KEYWORDS = {
     "control",
     "error"
 }
-
 
 def is_valid_entity(entity: dict) -> bool:
     name = entity["name"].strip().lower()
@@ -34,8 +33,21 @@ def is_valid_entity(entity: dict) -> bool:
 
     return True
 
-def ingest(pdf_path: str) -> dict:
+def faiss_document_exists(doc_id: str) -> bool:
+    store = FaissStore()
+    try:
+        store.load()
+    except Exception:
+        return False
+
+    return any(
+        meta.get("document_id") == doc_id
+        for meta in store.metadata
+    )
+
+def ingest(pdf_path: str, force: bool = False) -> dict:
     doc_id = document_hash(pdf_path)
+    faiss_exists = faiss_document_exists(doc_id)
 
     # 1. OCR
     pages = ocr_pdf_with_azure(pdf_path)
@@ -47,9 +59,20 @@ def ingest(pdf_path: str) -> dict:
     if not chunks:
         raise RuntimeError("No chunks generated")
 
+    for chunk in chunks:
+        lang = detect_language(chunk["text"])
+        chunk["language"] = lang
+
     # 3. Embeddings (batched, deterministic order)
     texts = [c["text"] for c in chunks]
     vectors = embed_texts(texts)
+
+    if not force and faiss_exists:
+        return {
+            "status": "skipped",
+            "reason": "document already ingested",
+            "document_id": doc_id
+        }
 
     # 4. Vector store
     store = FaissStore()
@@ -63,10 +86,17 @@ def ingest(pdf_path: str) -> dict:
 
     # 5. Graph ingestion (BATCHED)
     graph = Neo4jClient()
-
+    
+    if not force and graph.document_exists(doc_id):
+        return {
+            "status": "skipped",
+            "reason": "document already ingested",
+            "document_id": doc_id
+        }
+    
     graph_payload = []
     for chunk in chunks:
-        raw_entities = extract_entities(chunk["text"])
+        raw_entities = extract_entities_smart(chunk["text"], lang)
 
         entities = [
             e for e in raw_entities
@@ -86,6 +116,7 @@ def ingest(pdf_path: str) -> dict:
             session.execute_write(persist_chunks_batch, graph_payload)
 
     return {
+        "status": "success",
         "document_id": doc_id,
         "pages": len(pages),
         "chunks": len(chunks),
